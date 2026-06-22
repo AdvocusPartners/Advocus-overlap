@@ -112,12 +112,8 @@ input.inl{width:100%;min-width:120px;border:1px solid transparent;background:tra
   <div class="brand"><div class="mark">AP</div><div><b>ADVOCUS PARTNERS</b><span>CLIENT OVERLAP INTELLIGENCE</span></div></div>
   <div class="tools">
     <span class="sync" id="sync"><span class="dot"></span></span>
-    <button class="btn" id="editBtn">✎ Edit Mode</button>
-    <button class="btn" id="impBtn">Import CSV</button>
     <button class="btn" id="expBtn">Export CSV</button>
-    <button class="btn" id="resetBtn">Reset</button>
     <button class="btn hidden" id="lockBtn">Lock</button>
-    <input type="file" id="fileIn" accept=".csv" class="hidden">
   </div>
 </div></div>
 
@@ -165,7 +161,7 @@ input.inl{width:100%;min-width:120px;border:1px solid transparent;background:tra
 
   <div id="view-table" class="hidden">
     <div class="help" id="filterBanner" style="display:none;"></div>
-    <div class="help"><b>Keeping this fresh:</b> turn on <b>Edit Mode</b>, then tick a firm's box on any client to record that it holds that relationship, set <b>Collaborating</b>, and add a lead contact. Everything syncs to the shared Google Sheet automatically — you can also edit the Sheet directly. <b>Export CSV</b> for a snapshot; <b>Import CSV</b> to bulk-load an updated roster.</div>
+    <div class="help"><b>Live view.</b> This dashboard reads directly from your team's working Google Sheet — the single source of truth. Your leads edit the Sheet as they always have, and this view refreshes automatically. To change a client's firms, collaboration status, contact, or notes, edit the working Sheet. <b>Export CSV</b> gives you a snapshot of what's shown here.</div>
     <div class="panel" style="padding:.4rem;">
       <div class="tablewrap">
       <table class="grid" id="grid">
@@ -198,8 +194,9 @@ input.inl{width:100%;min-width:120px;border:1px solid transparent;background:tra
 <script>
 /* ============ CONFIG ============ */
 var CONFIG = {
-  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbzwjFO0o6QgLnVDGN8zoEtHPRVFnVbk-5Sy4y448pA029DqEWTBuo-BDUJQCIcGovgr/exec",  /* your Apps Script /exec URL */
-  REQUIRE_PASSWORD: true                            /* show the password gate (password lives in Code.gs) */
+  APPS_SCRIPT_URL: "https://script.google.com/macros/s/AKfycbzwjFO0o6QgLnVDGN8zoEtHPRVFnVbk-5Sy4y448pA029DqEWTBuo-BDUJQCIcGovgr/exec",
+  REQUIRE_PASSWORD: true,
+  REFRESH_MS: 60000   /* auto-refresh from the working Sheet every 60s */
 };
 
 var FULL = ["Avenue Solutions", "BGR Group", "Capitol Advocacy", "The Herald Group", "Hicks Partners", "Hilltop Public Solutions", "Stateside Associates", "The Tarrance Group"], SHORT = ["Avenue", "BGR", "Capitol", "Herald", "Hicks", "Hilltop", "Stateside", "Tarrance"], ABBR = ["Ave", "BGR", "Cap", "Her", "Hic", "Hil", "Sta", "Tar"];
@@ -238,6 +235,9 @@ function hideGate(){ document.getElementById("gate").style.display="none"; }
 function submitPw(){ var v=document.getElementById("pwInput").value.trim(); if(!v)return; sessionStorage.setItem(PW_KEY,v); hideGate(); showOverlay(true); loadFromSheet(); }
 
 /* ---- boot / load ---- */
+var refreshTimer=null;
+function startAutoRefresh(){ if(refreshTimer||!CONFIG.REFRESH_MS)return; refreshTimer=setInterval(silentReload, CONFIG.REFRESH_MS); }
+function silentReload(){ if(!connected)return; apiList().then(function(res){ if(!res||!res.ok||!res.rows)return; data=res.rows.map(function(r){ return {client:r.client, firms:(r.firms||[]).slice(), collab:normCollab(r.collab), contact:r.contact||"", notes:r.notes||""}; }); setSync("live","Live"); setUpdated(res.updated); localCache(true); renderAll(); }).catch(function(){}); }
 function boot(){
   document.getElementById("lockBtn").classList.toggle("hidden", !(connected && CONFIG.REQUIRE_PASSWORD));
   if(!connected){ setSync("demo","Demo mode"); var c=localCache(); data=c?c.rows:seedData(); setUpdated(c?c.updated:null); showOverlay(false); renderAll(); return; }
@@ -249,9 +249,9 @@ function loadFromSheet(){
   apiList().then(function(res){
     if(res && res.error==="unauthorized"){ sessionStorage.removeItem(PW_KEY); setSync("err","Locked"); showGate("Incorrect password — please try again."); return; }
     if(!res.ok) throw new Error(res.error||"err");
-    if(!res.rows || !res.rows.length){ data=[]; setSync("live","Live"); setUpdated(res.updated); showOverlay(false); showInit(); renderAll(); return; }
+    if(!res.rows || !res.rows.length){ data=[]; setSync("live","Live"); setUpdated(res.updated); showOverlay(false); renderAll(); return; }
     data=res.rows.map(function(r){ return {client:r.client, firms:(r.firms||[]).slice(), collab:normCollab(r.collab), contact:r.contact||"", notes:r.notes||""}; });
-    setSync("live","Live"); setUpdated(res.updated); localCache(true); showOverlay(false); renderAll();
+    setSync("live","Live"); setUpdated(res.updated); localCache(true); showOverlay(false); renderAll(); startAutoRefresh();
   }).catch(function(){ setSync("err","Offline"); var c=localCache(); data=c?c.rows:seedData(); setUpdated(c?c.updated:null); showOverlay(false); renderAll(); toast("Couldn't reach the Sheet — working offline"); });
 }
 function save(){
@@ -362,11 +362,7 @@ function importCSV(text){ var rows=parseCSV(text); if(rows.length<2){toast("Empt
 renderHead();
 document.querySelectorAll(".tab").forEach(function(t){t.onclick=function(){switchView(t.getAttribute("data-view"));};});
 ["search","firmFilter","statusFilter"].forEach(function(id){document.getElementById(id).addEventListener("input",function(){ if(view==="table")renderTable(); });});
-document.getElementById("editBtn").onclick=function(){ editing=!editing; this.classList.toggle("on",editing); document.getElementById("view-table").classList.toggle("editing",editing); this.textContent=editing?"✓ Editing":"✎ Edit Mode"; if(view!=="table"&&editing)switchView("table"); else renderTable(); };
 document.getElementById("expBtn").onclick=exportCSV;
-document.getElementById("impBtn").onclick=function(){document.getElementById("fileIn").click();};
-document.getElementById("fileIn").onchange=function(e){var f=e.target.files[0]; if(!f)return; var rd=new FileReader(); rd.onload=function(){importCSV(rd.result); e.target.value="";}; rd.readAsText(f);};
-document.getElementById("resetBtn").onclick=function(){ var m=connected?"Reset the shared Sheet to the original June 9, 2026 data? This replaces everyone's edits.":"Reset to the original June 9, 2026 data? Your edits in this browser will be cleared."; if(confirm(m)){ if(!connected){try{localStorage.removeItem(LS_KEY);}catch(e){}} data=seedData(); renderAll(); save(); toast("Reset to original data"); } };
 document.getElementById("lockBtn").onclick=function(){ try{sessionStorage.removeItem(PW_KEY);}catch(e){} location.reload(); };
 document.getElementById("pwBtn").onclick=submitPw;
 document.getElementById("pwInput").addEventListener("keydown",function(e){ if(e.key==="Enter")submitPw(); });
